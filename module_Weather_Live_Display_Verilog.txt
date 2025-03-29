@@ -1,0 +1,131 @@
+module Weather_Live_Display(
+    input clk_50MHz,    
+    input reset_n,      
+    input uart_rx,       
+    output [6:0] seg,    
+    output [5:0] an,     
+    output debug_led     
+);
+
+// 1. Clock and Reset ======================================
+wire clk = clk_50MHz;
+wire reset = ~reset_n;  // Convert to active-high
+
+// ===== ONLY CHANGED THIS SECTION =====
+// 7-segment encodings (YOUR SPECIFIC FORMAT)
+parameter ZERO  = 7'b0000001;  // g f e d c b a
+parameter ONE   = 7'b1001111;
+parameter TWO   = 7'b0010010;
+parameter THREE = 7'b0000110;
+parameter FOUR  = 7'b1001100;
+parameter FIVE  = 7'b0100100;
+parameter SIX   = 7'b0100000;
+parameter SEVEN = 7'b0001111;
+parameter EIGHT = 7'b0000000;
+parameter NINE  = 7'b0000100;
+parameter BLANK = 7'b1111111;
+// ===== END OF CHANGED SECTION =====
+
+// 2. UART Receiver (9600 baud) ===========================
+reg [12:0] baud_counter = 0;
+reg [3:0] bit_counter = 0;
+reg [7:0] rx_shift = 0;
+reg [7:0] rx_data = 0;
+reg rx_valid = 0;
+
+always @(posedge clk) begin
+    if (baud_counter == 5207) begin // 50MHz/9600 = 5208
+        baud_counter <= 0;
+        
+        case (bit_counter)
+            0: if (!uart_rx) bit_counter <= 1; // Start bit
+            1,2,3,4,5,6,7,8: begin            // Data bits
+                rx_shift[bit_counter-1] <= uart_rx;
+                bit_counter <= bit_counter + 1;
+            end
+            9: begin                           // Stop bit
+                if (uart_rx) begin             // Valid stop
+                    rx_data <= rx_shift;
+                    rx_valid <= 1;
+                end
+                bit_counter <= 0;
+            end
+        endcase
+    end else begin
+        baud_counter <= baud_counter + 1;
+        rx_valid <= 0;
+    end
+end
+
+// 3. Digit Storage ========================================
+reg [3:0] digits [0:5];
+reg [2:0] digit_ptr = 0;
+
+always @(posedge clk or posedge reset) begin
+    if (reset) begin
+        digit_ptr <= 0;
+        digits[0] <= 4'd0;
+        digits[1] <= 4'd0;
+        digits[2] <= 4'd0;
+        digits[3] <= 4'd0;
+        digits[4] <= 4'd0;
+        digits[5] <= 4'd0;
+    end 
+    else if (rx_valid && rx_data >= 8'h30 && rx_data <= 8'h39) begin
+        digits[digit_ptr] <= rx_data - 8'h30;  // ASCII to binary
+        digit_ptr <= (digit_ptr == 3'd5) ? 3'd0 : digit_ptr + 1;
+    end
+end
+
+// 4. Display Driver =======================================
+reg [16:0] refresh_counter = 0;
+reg [2:0] current_digit = 0;
+reg [6:0] seg_reg;
+reg [5:0] an_reg;
+
+always @(posedge clk) begin
+    refresh_counter <= refresh_counter + 1;
+    
+    if (refresh_counter == 17'd100_000) begin // 200Hz refresh
+        refresh_counter <= 0;
+        
+        an_reg <= 6'b111111; // Disable current digit
+        
+        current_digit <= current_digit + 1;
+        if (current_digit == 3'd5) current_digit <= 0;
+        
+        an_reg[current_digit] <= 1'b0; // Enable next digit
+        
+        // ===== UPDATED TO USE YOUR ENCODINGS =====
+        case (digits[current_digit])
+            0: seg_reg <= ZERO;
+            1: seg_reg <= ONE;
+            2: seg_reg <= TWO;
+            3: seg_reg <= THREE;
+            4: seg_reg <= FOUR;
+            5: seg_reg <= FIVE;
+            6: seg_reg <= SIX;
+            7: seg_reg <= SEVEN;
+            8: seg_reg <= EIGHT;
+            9: seg_reg <= NINE;
+            default: seg_reg <= BLANK;
+        endcase
+    end
+end
+
+// 5. Debug ================================================
+reg [23:0] led_counter = 0;
+reg led_toggle = 0;
+
+always @(posedge clk) begin
+    led_counter <= led_counter + 1;
+    if (led_counter == 24'hFFFFFF) begin
+        led_toggle <= ~led_toggle;
+    end
+end
+
+assign seg = seg_reg;
+assign an = an_reg;
+assign debug_led = led_toggle; // Blinking means clock works
+
+endmodule
